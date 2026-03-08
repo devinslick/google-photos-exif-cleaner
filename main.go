@@ -237,39 +237,63 @@ var filenameTimestampRe = regexp.MustCompile(`(\d{4})(\d{2})(\d{2})[_-](\d{2})(\
 // e.g. "2022-10-24-150226287.mp4", "2022-10-24.jpg"
 var filenameISODateRe = regexp.MustCompile(`(\d{4})-(\d{2})-(\d{2})(?:[_-](\d{2})(\d{2})(\d{2})\d*)?`)
 
+// filenameCompactNoSepRe matches exactly 14 consecutive digits as YYYYMMDDHHMMSS,
+// bounded by non-digit characters (or start/end of string) to avoid matching
+// within longer numeric IDs.
+// e.g. "lv_7324034615860006160_20240617193045.mp4"
+var filenameCompactNoSepRe = regexp.MustCompile(`(?:^|[^0-9])(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(?:[^0-9]|$)`)
+
 // extractTimestampFromFilename looks for a date/time pattern in the filename
 // and returns the timestamp in exiftool format, or "" if none found or invalid.
 //
 // Supported patterns:
 //   - YYYYMMDD[_-]HHMMSS[...]  e.g. "20240709_182027.mp4", "PXL_20231123_182518628.TS.mp4"
 //   - YYYY-MM-DD[-HHMMSS[...]] e.g. "2022-10-24-150226287.mp4", "2022-10-24.jpg"
+//   - YYYYMMDDHHMMSS            e.g. "lv_7324034615860006160_20240617193045.mp4"
 func extractTimestampFromFilename(name string) string {
 	toInt := func(s string) int { n, _ := strconv.Atoi(s); return n }
+
+	validate := func(yr, mo, dy, hr, mn, sc int) bool {
+		return yr >= 1970 && yr <= 2099 && mo >= 1 && mo <= 12 && dy >= 1 && dy <= 31 &&
+			hr <= 23 && mn <= 59 && sc <= 59
+	}
+	format := func(yr, mo, dy, hr, mn, sc int) string {
+		return fmt.Sprintf("%04d:%02d:%02d %02d:%02d:%02d", yr, mo, dy, hr, mn, sc)
+	}
 
 	// Compact format: YYYYMMDD[_-]HHMMSS (time required)
 	if m := filenameTimestampRe.FindStringSubmatch(name); m != nil {
 		yr, mo, dy := toInt(m[1]), toInt(m[2]), toInt(m[3])
 		hr, mn, sc := toInt(m[4]), toInt(m[5]), toInt(m[6])
-		if yr >= 1970 && yr <= 2099 && mo >= 1 && mo <= 12 && dy >= 1 && dy <= 31 &&
-			hr <= 23 && mn <= 59 && sc <= 59 {
-			return fmt.Sprintf("%04d:%02d:%02d %02d:%02d:%02d", yr, mo, dy, hr, mn, sc)
+		if validate(yr, mo, dy, hr, mn, sc) {
+			return format(yr, mo, dy, hr, mn, sc)
 		}
 	}
 
 	// ISO-dash format: YYYY-MM-DD, optionally followed by [_-]HHMMSS[...]
 	if m := filenameISODateRe.FindStringSubmatch(name); m != nil {
 		yr, mo, dy := toInt(m[1]), toInt(m[2]), toInt(m[3])
-		if yr < 1970 || yr > 2099 || mo < 1 || mo > 12 || dy < 1 || dy > 31 {
-			return ""
-		}
-		hr, mn, sc := 12, 0, 0 // default to noon when no time present
-		if m[4] != "" {
-			h, mi, s := toInt(m[4]), toInt(m[5]), toInt(m[6])
-			if h <= 23 && mi <= 59 && s <= 59 {
-				hr, mn, sc = h, mi, s
+		if yr >= 1970 && yr <= 2099 && mo >= 1 && mo <= 12 && dy >= 1 && dy <= 31 {
+			hr, mn, sc := 12, 0, 0 // default to noon when no time present
+			if m[4] != "" {
+				h, mi, s := toInt(m[4]), toInt(m[5]), toInt(m[6])
+				if h <= 23 && mi <= 59 && s <= 59 {
+					hr, mn, sc = h, mi, s
+				}
 			}
+			return format(yr, mo, dy, hr, mn, sc)
 		}
-		return fmt.Sprintf("%04d:%02d:%02d %02d:%02d:%02d", yr, mo, dy, hr, mn, sc)
+	}
+
+	// No-separator compact format: exactly 14 digits as YYYYMMDDHHMMSS,
+	// bounded by non-digits to avoid matching within longer numeric IDs.
+	// e.g. "lv_7324034615860006160_20240617193045.mp4"
+	if m := filenameCompactNoSepRe.FindStringSubmatch(name); m != nil {
+		yr, mo, dy := toInt(m[1]), toInt(m[2]), toInt(m[3])
+		hr, mn, sc := toInt(m[4]), toInt(m[5]), toInt(m[6])
+		if validate(yr, mo, dy, hr, mn, sc) {
+			return format(yr, mo, dy, hr, mn, sc)
+		}
 	}
 
 	return ""
